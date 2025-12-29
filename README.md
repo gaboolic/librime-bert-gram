@@ -1,6 +1,7 @@
 # librime-bert-grammar
 
 使用 BERT 模型替代 n-gram 模型（如 octagram）的 Rime 插件。
+本项目处于开发阶段
 
 ## 功能
 
@@ -106,6 +107,21 @@ bert_grammar:
   vocab_path: "/path/to/vocab.txt"
 ```
 
+## 测试
+
+如何验证 BERT 模型是否正常工作？请查看 [TESTING.md](TESTING.md) 获取详细的测试指南。
+
+**快速测试**：
+```bash
+# 编译测试程序
+mkdir build && cd build
+cmake .. -DBUILD_TEST=ON
+cmake --build .
+
+# 运行测试
+./test_bert_grammar <model_path> <vocab_path>
+```
+
 ## 注意事项
 
 1. **注册优先级**: 这个插件注册为 "grammar"，会覆盖 octagram 的注册。如果两个插件都加载，后加载的会生效。
@@ -115,3 +131,5 @@ bert_grammar:
 3. **性能**: BERT 模型推理比 n-gram 慢，考虑使用量化模型或更小的模型。
 
 4. **内存**: BERT 模型通常较大，注意内存使用。
+
+5. **测试**: 使用测试程序验证模型是否正常工作，特别是上下文敏感性测试。

@@ -227,61 +227,91 @@ void TestPerformance(BertGrammar* grammar) {
 }
 
 int main(int argc, char* argv[]) {
-  // 初始化 Google Logging
-  google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = 1;
+  // 确保输出立即刷新
+  std::cout.setf(std::ios::unitbuf);
+  std::cerr.setf(std::ios::unitbuf);
   
-  PrintSeparator("BERT Grammar 测试程序");
-  
-  // 检查命令行参数
-  if (argc < 3) {
-    std::cerr << "用法: " << argv[0] << " <model_path> <vocab_path> [config_path]\n";
-    std::cerr << "\n示例:\n";
-    std::cerr << "  " << argv[0] << " model.onnx vocab.txt\n";
-    std::cerr << "  " << argv[0] << " model.onnx vocab.txt /path/to/default.yaml\n";
-    return 1;
-  }
-  
-  std::string model_path = argv[1];
-  std::string vocab_path = argv[2];
-  std::string config_path = (argc > 3) ? argv[3] : "";
-  
-  std::cout << "模型路径: " << model_path << "\n";
-  std::cout << "词汇表路径: " << vocab_path << "\n";
-  if (!config_path.empty()) {
-    std::cout << "配置文件路径: " << config_path << "\n";
-  }
-  std::cout << "\n";
-  
-  // 创建配置对象
-  Config* config = nullptr;
-  if (!config_path.empty()) {
-    // 从文件加载配置
-    config = new Config();
-    path config_file_path(config_path);
-    if (!config->LoadFromFile(config_file_path)) {
-      std::cerr << "错误: 无法加载配置文件: " << config_path << "\n";
-      delete config;
+  try {
+    // 初始化 Google Logging
+    google::InitGoogleLogging(argv[0]);
+    FLAGS_logtostderr = 1;
+    
+    // 初始化 RIME Service（必须在创建 BertGrammar 之前）
+    // 这确保 Service::instance() 可用
+    Deployer& deployer = Service::instance().deployer();
+    
+    PrintSeparator("BERT Grammar 测试程序");
+    std::cout.flush();
+    
+    // 检查命令行参数
+    if (argc < 3) {
+      std::cerr << "用法: " << argv[0] << " <model_path> <vocab_path> [config_path]\n";
+      std::cerr << "\n示例:\n";
+      std::cerr << "  " << argv[0] << " model.onnx vocab.txt\n";
+      std::cerr << "  " << argv[0] << " model.onnx vocab.txt /path/to/default.yaml\n";
+      std::cerr.flush();
       return 1;
     }
-    // 如果配置文件中没有设置，使用命令行参数
-    // 注意：如果配置文件中没有设置，我们无法使用 SetString（可能未链接）
-    // 所以直接使用命令行参数创建新的配置
-    string existing_model_path, existing_vocab_path;
-    config->GetString("bert_grammar/model_path", &existing_model_path);
-    config->GetString("bert_grammar/vocab_path", &existing_vocab_path);
-    if (existing_model_path.empty() || existing_vocab_path.empty()) {
-      std::cout << "警告: 配置文件中缺少模型或词汇表路径，将使用命令行参数\n";
-      // 创建新的配置对象，直接使用命令行参数
-      delete config;
+  
+    std::string model_path = argv[1];
+    std::string vocab_path = argv[2];
+    std::string config_path = (argc > 3) ? argv[3] : "";
+    
+    std::cout << "模型路径: " << model_path << "\n";
+    std::cout << "词汇表路径: " << vocab_path << "\n";
+    if (!config_path.empty()) {
+      std::cout << "配置文件路径: " << config_path << "\n";
+    }
+    std::cout << "\n";
+    std::cout.flush();
+  
+    // 创建配置对象
+    Config* config = nullptr;
+    if (!config_path.empty()) {
+      // 从文件加载配置
       config = new Config();
-      // 由于 SetString 可能不可用，我们创建一个临时配置文件
+      path config_file_path(config_path);
+      if (!config->LoadFromFile(config_file_path)) {
+        std::cerr << "错误: 无法加载配置文件: " << config_path << "\n";
+        delete config;
+        return 1;
+      }
+      // 如果配置文件中没有设置，使用命令行参数
+      // 注意：如果配置文件中没有设置，我们无法使用 SetString（可能未链接）
+      // 所以直接使用命令行参数创建新的配置
+      string existing_model_path, existing_vocab_path;
+      config->GetString("bert_grammar/model_path", &existing_model_path);
+      config->GetString("bert_grammar/vocab_path", &existing_vocab_path);
+      if (existing_model_path.empty() || existing_vocab_path.empty()) {
+        std::cout << "警告: 配置文件中缺少模型或词汇表路径，将使用命令行参数\n";
+        // 创建新的配置对象，直接使用命令行参数
+        delete config;
+        config = new Config();
+        // 由于 SetString 可能不可用，我们创建一个临时配置文件
+        std::string temp_config = "bert_grammar:\n  model_path: " + model_path + "\n  vocab_path: " + vocab_path + "\n";
+        std::string temp_file = std::tmpnam(nullptr);
+        temp_file += ".yaml";
+        std::ofstream ofs(temp_file);
+        ofs << temp_config;
+        ofs.close();
+        path temp_path(temp_file);
+        if (!config->LoadFromFile(temp_path)) {
+          std::cerr << "错误: 无法创建临时配置文件\n";
+          delete config;
+          return 1;
+        }
+        // 临时文件会在程序结束时被删除（或手动删除）
+        std::remove(temp_file.c_str());
+      }
+    } else {
+      // 创建临时配置文件
       std::string temp_config = "bert_grammar:\n  model_path: " + model_path + "\n  vocab_path: " + vocab_path + "\n";
       std::string temp_file = std::tmpnam(nullptr);
       temp_file += ".yaml";
       std::ofstream ofs(temp_file);
       ofs << temp_config;
       ofs.close();
+      config = new Config();
       path temp_path(temp_file);
       if (!config->LoadFromFile(temp_path)) {
         std::cerr << "错误: 无法创建临时配置文件\n";
@@ -291,77 +321,71 @@ int main(int argc, char* argv[]) {
       // 临时文件会在程序结束时被删除（或手动删除）
       std::remove(temp_file.c_str());
     }
-  } else {
-    // 创建临时配置文件
-    std::string temp_config = "bert_grammar:\n  model_path: " + model_path + "\n  vocab_path: " + vocab_path + "\n";
-    std::string temp_file = std::tmpnam(nullptr);
-    temp_file += ".yaml";
-    std::ofstream ofs(temp_file);
-    ofs << temp_config;
-    ofs.close();
-    config = new Config();
-    path temp_path(temp_file);
-    if (!config->LoadFromFile(temp_path)) {
-      std::cerr << "错误: 无法创建临时配置文件\n";
-      delete config;
-      return 1;
+    
+    // 创建 BertGrammar 实例
+    std::cout << "正在初始化 BERT Grammar 组件...\n";
+    std::cout.flush();
+    BertGrammar* grammar = new BertGrammar(config);
+  
+    // 运行测试
+    bool all_tests_passed = true;
+    
+    // 测试 1: 模型加载
+    if (!TestModelLoading(grammar)) {
+      all_tests_passed = false;
+      std::cout << "\n⚠ 模型可能未正确加载。请检查:\n";
+      std::cout << "  1. 模型文件路径是否正确\n";
+      std::cout << "  2. 模型文件是否存在\n";
+      std::cout << "  3. ONNX Runtime 是否正确链接\n";
+      std::cout << "  4. 查看上面的日志输出\n";
+      std::cout.flush();
     }
-    // 临时文件会在程序结束时被删除（或手动删除）
-    std::remove(temp_file.c_str());
+    
+    // 测试 2: 词汇表
+    if (!TestVocabulary(grammar)) {
+      all_tests_passed = false;
+    }
+    
+    // 测试 3: 上下文查询
+    if (!TestContextualQueries(grammar)) {
+      all_tests_passed = false;
+    }
+    
+    // 测试 4: 上下文敏感性
+    if (!TestContextSensitivity(grammar)) {
+      all_tests_passed = false;
+    }
+    
+    // 测试 5: 性能
+    TestPerformance(grammar);
+    
+    // 总结
+    PrintSeparator("测试总结");
+    
+    if (all_tests_passed) {
+      std::cout << "✓ 所有测试通过！BERT 模型正常工作。\n";
+    } else {
+      std::cout << "⚠ 部分测试未通过。请检查上面的输出和日志。\n";
+    }
+    
+    std::cout << "\n提示: 查看上面的日志输出以获取更多信息。\n";
+    std::cout << "如果看到 'ONNX Runtime session loaded successfully'，说明模型已加载。\n";
+    std::cout << "如果看到 'BERT inference failed'，说明推理过程有问题。\n";
+    std::cout.flush();
+    
+    // 清理
+    delete grammar;
+    delete config;
+    
+    return all_tests_passed ? 0 : 1;
+  } catch (const std::exception& e) {
+    std::cerr << "\n错误: 程序异常终止: " << e.what() << "\n";
+    std::cerr.flush();
+    return 1;
+  } catch (...) {
+    std::cerr << "\n错误: 程序异常终止: 未知异常\n";
+    std::cerr.flush();
+    return 1;
   }
-  
-  // 创建 BertGrammar 实例
-  std::cout << "正在初始化 BERT Grammar 组件...\n";
-  BertGrammar* grammar = new BertGrammar(config);
-  
-  // 运行测试
-  bool all_tests_passed = true;
-  
-  // 测试 1: 模型加载
-  if (!TestModelLoading(grammar)) {
-    all_tests_passed = false;
-    std::cout << "\n⚠ 模型可能未正确加载。请检查:\n";
-    std::cout << "  1. 模型文件路径是否正确\n";
-    std::cout << "  2. 模型文件是否存在\n";
-    std::cout << "  3. ONNX Runtime 是否正确链接\n";
-    std::cout << "  4. 查看上面的日志输出\n";
-  }
-  
-  // 测试 2: 词汇表
-  if (!TestVocabulary(grammar)) {
-    all_tests_passed = false;
-  }
-  
-  // 测试 3: 上下文查询
-  if (!TestContextualQueries(grammar)) {
-    all_tests_passed = false;
-  }
-  
-  // 测试 4: 上下文敏感性
-  if (!TestContextSensitivity(grammar)) {
-    all_tests_passed = false;
-  }
-  
-  // 测试 5: 性能
-  TestPerformance(grammar);
-  
-  // 总结
-  PrintSeparator("测试总结");
-  
-  if (all_tests_passed) {
-    std::cout << "✓ 所有测试通过！BERT 模型正常工作。\n";
-  } else {
-    std::cout << "⚠ 部分测试未通过。请检查上面的输出和日志。\n";
-  }
-  
-  std::cout << "\n提示: 查看上面的日志输出以获取更多信息。\n";
-  std::cout << "如果看到 'ONNX Runtime session loaded successfully'，说明模型已加载。\n";
-  std::cout << "如果看到 'BERT inference failed'，说明推理过程有问题。\n";
-  
-  // 清理
-  delete grammar;
-  delete config;
-  
-  return all_tests_passed ? 0 : 1;
 }
 

@@ -239,15 +239,25 @@ class RimeBertInputMethod:
         
         return candidate_texts
     
-    def input_sentence_pinyin(self, pinyin_text: str, max_segment_candidates: int = 5, 
-                             max_combinations: int = 100) -> Optional[Dict]:
+    def input_sentence_pinyin(self, pinyin_text: str, max_segment_candidates: int = 3, 
+                             max_combinations: int = 30) -> Optional[Dict]:
         """
-        整句输入：输入整句拼音，优先使用 Rime 的完整候选词，用 BERT 评估完整句子
+        整句输入：参考 MakeSentence 逻辑，构建词图，生成所有可能的路径，用 BERT 评估
+        
+        参考 librime 的 MakeSentence 逻辑：
+        1. 构建词图（WordGraph）：从每个位置开始，查找所有可能的词（不同长度）
+        2. 生成所有可能的路径组合（使用评分筛选，减少无效路径）
+        3. 使用 BERT 评估所有路径，找到最合理的整句
+        
+        优化点：
+        - 词图构建时每个分段只取前2个候选词（减少组合爆炸）
+        - 路径生成时使用Rime排序评分，优先保留高质量路径
+        - 每个位置最多保留20条路径（而不是50+条）
         
         Args:
-            pinyin_text: 整句拼音（全小写，无空格，例如："congmingdeshurufa"）
-            max_segment_candidates: 每个分段最多考虑的候选词数量（仅在分段模式下使用）
-            max_combinations: 最多评估的组合数量（避免组合爆炸）
+            pinyin_text: 整句拼音（全小写，无空格，例如："gegeguojiayougegeguojiadeguoge"）
+            max_segment_candidates: 每个分段最多考虑的候选词数量（词图构建时实际只取前2个）
+            max_combinations: 最多评估的组合数量（避免组合爆炸，默认30）
         
         Returns:
             包含最佳完整句子和评分信息的字典
@@ -256,6 +266,7 @@ class RimeBertInputMethod:
             return None
         
         print(f"\n输入整句拼音: {pinyin_text}")
+        print(f"参考 MakeSentence 逻辑：构建词图 -> 生成路径 -> BERT 评估")
         
         # 1. 输入整句拼音到 Rime，让 Rime 自动切分音节
         if not self.rime.simulate_key_sequence(self.session_id, pinyin_text):
@@ -276,64 +287,17 @@ class RimeBertInputMethod:
         
         print(f"   Rime 切分结果: {input_text}")
         
-        # 4. 优先使用 Rime 直接返回的完整候选词
+        # 4. 获取 Rime 直接返回的完整候选词（作为参考，但主要使用词图方法）
         candidates = context.get('candidates', [])
         rime_full_candidates = [cand.get('text', '') for cand in candidates if cand.get('text', '')]
         
         if rime_full_candidates:
-            print(f"   ✓ Rime 返回了 {len(rime_full_candidates)} 个完整候选词")
+            print(f"   ✓ Rime 返回了 {len(rime_full_candidates)} 个完整候选词（作为参考）")
             print(f"   前5个候选词: {', '.join(rime_full_candidates[:5])}")
-            
-            # 如果 Rime 返回的候选词足够多，直接使用它们
-            all_combinations = rime_full_candidates[:max_combinations]
-            print(f"\n使用 Rime 的完整候选词（共 {len(all_combinations)} 个）...")
-            
-            # 使用 BERT 评估这些完整候选词
-            print(f"\n使用 BERT 模型评估 {len(all_combinations)} 个完整句子...")
-            start_time = time.time()
-            
-            ranked_results = self.scorer.compare_sentences(all_combinations, method='combined')
-            
-            elapsed_time = (time.time() - start_time) * 1000
-            print(f"   ✓ 评估完成（耗时: {elapsed_time:.2f} ms）")
-            
-            # 构建结果
-            result = {
-                'input_pinyin': pinyin_text,
-                'rime_input': input_text,
-                'syllables': input_text.strip().split(),
-                'segments': [],  # 使用完整候选词时不需要分段信息
-                'segment_candidates': [],
-                'total_combinations': len(all_combinations),
-                'ranked_sentences': [],
-                'scoring_time_ms': elapsed_time,
-                'method': 'rime_full_candidates'  # 标记使用的方法
-            }
-            
-            # 添加排序后的完整句子
-            for i, ranked_item in enumerate(ranked_results[:20]):  # 只保存前20个
-                sentence = ranked_item['sentence']
-                combined_score = ranked_item['score']
-                
-                mlm_score = self.scorer.calculate_sentence_score_mlm(sentence)
-                coherence_score = self.scorer.calculate_sentence_coherence(sentence)
-                perplexity = self.scorer.calculate_perplexity(sentence)
-                
-                result['ranked_sentences'].append({
-                    'rank': i + 1,
-                    'sentence': sentence,
-                    'scores': {
-                        'combined': combined_score,
-                        'mlm': mlm_score,
-                        'coherence': coherence_score,
-                        'perplexity': perplexity
-                    }
-                })
-            
-            return result
         
-        # 5. 如果 Rime 没有返回完整候选词，则使用分段组合的方法（备用方案）
-        print("   ⚠ Rime 未返回完整候选词，使用分段组合方法...")
+        # 5. 构建词图（WordGraph）：参考 MakeSentence 的逻辑
+        # WordGraph 结构：{start_pos: {end_pos: [候选词列表]}}
+        print("\n构建词图（WordGraph）...")
         
         # 解析音节切分（按空格分割）
         syllables = input_text.strip().split()
@@ -344,142 +308,276 @@ class RimeBertInputMethod:
         print(f"   音节数量: {len(syllables)}")
         print(f"   音节列表: {syllables}")
         
-        # 为每个音节段获取候选词
-        # 使用动态规划找到最佳分段方案
-        print("\n正在获取各音节段的候选词...")
+        # 构建词图：从每个位置开始，尝试不同长度的分段
+        # 类似 MakeSentence 中的逻辑：遍历所有可能的起始位置和长度
+        word_graph = {}  # {start_pos: {end_pos: [(候选词, 排序)]}}
+        total_syllable_length = len(''.join(syllables))  # 总拼音长度（无空格）
         
-        # 使用动态规划：dp[i] 表示从位置 i 开始的最佳分段方案
-        # 存储格式: (分段列表, 评分)
-        dp = {}
+        # 优化：根据分段长度动态调整候选词数量
+        # 对于较长的分段（2个音节以上），保留更多候选词，避免遗漏重要词汇
+        # 对于单字，只取前1-2个即可
         
-        def find_best_segmentation(start: int) -> Tuple[List[Dict], float]:
-            """递归查找从 start 位置开始的最佳分段"""
-            if start >= len(syllables):
-                return [], 0.0
+        # 从每个可能的起始位置开始查找
+        for start_pos in range(len(syllables)):
+            word_graph[start_pos] = {}
             
-            if start in dp:
-                return dp[start]
-            
-            best_segments = []
-            best_score = -float('inf')
-            
-            # 尝试不同的分段长度（优先考虑常见的中文词长度：2-3个音节）
-            # 常见长度：2(双字词), 3(三字词), 4(四字词如"各个国家"), 1(单字), 5(五字词)
-            lengths_to_try = [2, 3, 4, 1, 5]  # 优先尝试2-4个音节
+            # 优化：优先尝试更常见的词长度（2-3个音节最常见）
+            # 常见长度：2(双字词), 3(三字词), 4(四字词), 1(单字), 5(五字词)
+            # 优先顺序：2 > 3 > 4 > 1 > 5
+            # 注意：优先尝试更长的词，避免过早使用单字，这样可以包含更多完整词汇（如"倉鼠"）
+            lengths_to_try = [2, 3, 4, 1, 5]
             
             for length in lengths_to_try:
-                if start + length > len(syllables):
+                if start_pos + length > len(syllables):
                     continue
                 
-                segment_syllables = syllables[start:start+length]
+                # 获取这个分段的拼音
+                segment_syllables = syllables[start_pos:start_pos+length]
                 segment_pinyin = ''.join(segment_syllables)  # 无空格连接
+                end_pos = start_pos + length
                 
-                # 检查这个分段是否有候选词
-                candidates = self.get_candidates_for_pinyin(segment_pinyin, max_segment_candidates)
-                if not candidates:
+                # 根据分段长度动态调整候选词数量
+                # 单字：只取前1-2个（减少组合爆炸）
+                # 2个音节以上：取更多候选词（避免遗漏重要词汇，如"倉鼠"）
+                if length == 1:
+                    max_candidates_for_segment = min(2, max_segment_candidates)
+                elif length == 2:
+                    # 双字词：取前3-4个，因为双字词很重要且数量相对较少
+                    max_candidates_for_segment = min(4, max_segment_candidates)
+                else:
+                    # 3个音节以上：取更多候选词
+                    max_candidates_for_segment = min(5, max_segment_candidates)
+                
+                # 获取这个分段的候选词
+                candidates = self.get_candidates_for_pinyin(segment_pinyin, max_candidates_for_segment)
+                if candidates:
+                    # 存储候选词及其在Rime中的排序（用于后续路径评分）
+                    word_graph[start_pos][end_pos] = [(cand, i) for i, cand in enumerate(candidates)]
+                    print(f"   位置 {start_pos}->{end_pos} ({segment_pinyin}, 长度{length}): {len(candidates)} 个候选词")
+        
+        # 打印词图信息（包含候选词详情，用于调试）
+        print(f"\n词图构建完成:")
+        total_edges = sum(len(edges) for edges in word_graph.values())
+        print(f"   顶点数: {len(word_graph)}")
+        print(f"   边数: {total_edges}")
+        # 打印关键位置的候选词（用于调试）
+        print(f"\n关键位置的候选词详情:")
+        for start_pos in sorted(word_graph.keys()):
+            for end_pos in sorted(word_graph[start_pos].keys()):
+                candidates = word_graph[start_pos][end_pos]
+                candidate_texts = [f"{word}(rank:{rank})" for word, rank in candidates]
+                pinyin = ''.join(syllables[start_pos:end_pos])
+                print(f"   位置 {start_pos}->{end_pos} ({pinyin}): {', '.join(candidate_texts)}")
+        
+        # 6. 生成所有可能的路径（从位置0到位置len(syllables)）
+        # 使用动态规划 + 限制每个位置的路径数量（类似 Beam Search）
+        print("\n生成所有可能的路径（使用 Beam Search 限制）...")
+        
+        # 使用动态规划：dp[pos] = 到达位置 pos 的所有路径（限制数量）
+        # 每个路径是 [(start_pos, end_pos, word, rank), ...] 的列表
+        # rank 是候选词在Rime中的排序（用于评分）
+        dp = {}  # {pos: [路径列表]}
+        # 优化：减少每个位置保留的路径数，使用评分来筛选高质量路径
+        max_paths_per_pos = min(50, max_combinations)  # 每个位置最多保留的路径数（减少组合爆炸）
+        
+        # 初始化：位置0的路径为空路径
+        # 路径格式：[(start_pos, end_pos, word, rank), ...]
+        dp[0] = [[]]
+        
+        # 按位置顺序处理（从小到大），使用多轮迭代确保所有路径都被扩展
+        target_pos = len(syllables)
+        max_iterations = len(syllables) * 2  # 最多迭代次数，避免无限循环
+        
+        def calculate_path_score(path):
+            """
+            计算路径的评分（用于筛选高质量路径）
+            评分规则：
+            1. 路径中所有候选词的Rime排序之和（越小越好，rank=0表示最优）
+            2. 路径长度（边数，越少越好，因为使用更长的词更符合中文习惯）
+            3. 优先使用完整词汇（如"倉鼠"）而不是单字组合（如"倉"+"書"）
+            """
+            if not path:
+                return float('inf')
+            # 计算所有候选词的排序之和（rank越小越好）
+            total_rank = sum(rank for _, _, _, rank in path)
+            # 路径长度（边数，越少越好，因为使用更长的词更符合中文习惯）
+            # 例如："糧倉裏的倉鼠"（3条边）比"糧倉裏的倉書"（4条边）更好
+            path_length = len(path)
+            # 综合评分：排序和越小越好，路径长度越小越好
+            # 路径长度权重设为0.5，让使用更长词的路径评分更好
+            return total_rank + path_length * 0.5
+        
+        for iteration in range(max_iterations):
+            changed = False
+            # 按位置顺序处理
+            positions_to_process = sorted([pos for pos in dp.keys() if pos < target_pos])
+            
+            for pos in positions_to_process:
+                if pos not in word_graph:
                     continue
                 
-                # 计算这个分段的评分
-                # 评分规则：
-                # 1. 候选词数量越多，得分越高
-                # 2. 2-3个音节的词得分更高（更常见）
-                # 3. 4-5个音节的词（如"各个国家"）也有加分
-                # 4. 1个音节的词得分较低，但如果是常见单字（如"有"、"的"）应该允许
-                candidate_score = len(candidates) * 0.1
-                length_bonus = 0.0
-                if length == 2 or length == 3:
-                    length_bonus = 0.5  # 2-3个音节的词更常见，加分
-                elif length == 4 or length == 5:
-                    length_bonus = 0.3  # 4-5个音节的词（如"各个国家"）也有加分
-                elif length == 1:
-                    # 单字词：检查是否是常见单字
-                    common_single_chars = {'you', 'de', 'le', 'ma', 'ne', 'ba', 'a', 'o', 'e'}
-                    if segment_pinyin in common_single_chars:
-                        length_bonus = 0.2  # 常见单字有加分
-                    else:
-                        length_bonus = -0.3  # 其他单字词得分较低
+                # 从当前位置出发的所有路径
+                current_paths = dp[pos]
+                if not current_paths:
+                    continue
                 
-                segment_score = candidate_score + length_bonus
-                
-                # 递归处理剩余部分
-                remaining_segments, remaining_score = find_best_segmentation(start + length)
-                
-                # 总评分
-                total_score = segment_score + remaining_score
-                
-                if total_score > best_score:
-                    best_score = total_score
-                    best_segments = [{
-                        'pinyin': segment_pinyin,
-                        'syllables': segment_syllables,
-                        'candidates': candidates
-                    }] + remaining_segments
+                # 遍历所有可能的边
+                for end_pos, candidate_list in word_graph[pos].items():
+                    if end_pos > target_pos:
+                        continue  # 跳过超过终点的边
+                    
+                    if end_pos not in dp:
+                        dp[end_pos] = []
+                    
+                    # 为每条当前路径，尝试所有候选词
+                    # 路径格式：[(start_pos, end_pos, word, rank), ...]
+                    new_paths = []
+                    for path in current_paths:
+                        for candidate, rank in candidate_list:
+                            new_path = path + [(pos, end_pos, candidate, rank)]
+                            # 检查是否已存在相同路径（避免重复）
+                            path_str = ''.join(word for _, _, word, _ in new_path)
+                            existing_paths_str = [''.join(word for _, _, word, _ in p) for p in dp[end_pos]]
+                            if path_str not in existing_paths_str:
+                                new_paths.append(new_path)
+                    
+                    if new_paths:
+                        # 将新路径添加到目标位置
+                        dp[end_pos].extend(new_paths)
+                        changed = True
+                        
+                        # 限制目标位置的路径数量（保留前 N 条）
+                        # 优化：使用评分来筛选，而不是简单按长度
+                        if len(dp[end_pos]) > max_paths_per_pos:
+                            # 按路径评分排序，优先保留评分更好的路径（评分越小越好）
+                            dp[end_pos].sort(key=calculate_path_score)
+                            dp[end_pos] = dp[end_pos][:max_paths_per_pos]
             
-            # 如果没有找到有效分段，使用单个音节（作为后备）
-            if not best_segments and start < len(syllables):
-                single_pinyin = syllables[start]
-                single_candidates = self.get_candidates_for_pinyin(single_pinyin, max_segment_candidates)
-                remaining_segments, _ = find_best_segmentation(start + 1)
-                best_segments = [{
-                    'pinyin': single_pinyin,
-                    'syllables': [syllables[start]],
-                    'candidates': single_candidates if single_candidates else [single_pinyin]
-                }] + remaining_segments
-                best_score = -1.0  # 单字符分段得分较低
-            
-            dp[start] = (best_segments, best_score)
-            return best_segments, best_score
+            # 如果没有变化，说明已经处理完所有可能的路径
+            if not changed:
+                break
         
-        # 从位置 0 开始查找最佳分段
-        segment_candidates, _ = find_best_segmentation(0)
+        # 只获取到达终点的完整路径
+        if target_pos in dp and dp[target_pos]:
+            all_paths = dp[target_pos]
+            # 对完整路径按评分排序
+            all_paths.sort(key=calculate_path_score)
+            print(f"   生成 {len(all_paths)} 条完整路径（到达终点位置 {target_pos}）")
+            # 调试：只显示前10条路径（减少输出）
+            if len(all_paths) > 0:
+                print(f"   前10条路径详情:")
+                for i, path in enumerate(all_paths[:10], 1):
+                    path_str = ' -> '.join([f"{start}->{end}({word})" for start, end, word, _ in path])
+                    sentence = ''.join(word for _, _, word, _ in path)
+                    score = calculate_path_score(path)
+                    print(f"      路径{i} (评分:{score:.2f}): {path_str} -> 句子: {sentence}")
+        else:
+            print(f"   ⚠ 无法到达终点位置 {target_pos}")
+            # 显示到达的位置信息（用于调试）
+            reached_positions = sorted([pos for pos in dp.keys() if pos <= target_pos])
+            if reached_positions:
+                print(f"   到达的位置: {reached_positions}")
+                print(f"   最接近终点的位置: {max(reached_positions)}")
+                # 显示词图中是否有到达终点的边
+                has_target_edge = any(target_pos in edges for edges in word_graph.values())
+                print(f"   词图中是否有到达终点的边: {has_target_edge}")
+            all_paths = []
+            print(f"   ✗ 无法生成完整路径，跳过不完整的路径")
         
-        # 打印分段信息和候选词（用于调试）
-        for i, seg in enumerate(segment_candidates):
-            syllables_str = ' '.join(seg['syllables'])
-            top_candidates = seg['candidates'][:3]  # 显示前3个候选词
-            candidates_str = ', '.join(top_candidates) if top_candidates else '无'
-            print(f"   分段 {i+1} ({seg['pinyin']}, {len(seg['syllables'])}个音节): {len(seg['candidates'])} 个候选词")
-            if top_candidates:
-                print(f"      候选词示例: {candidates_str}")
+        # 限制路径数量，避免组合爆炸
+        if len(all_paths) > max_combinations:
+            print(f"   路径过多，限制为前 {max_combinations} 条")
+            all_paths = all_paths[:max_combinations]
         
-        if not segment_candidates:
-            print("   ✗ 所有分段都没有候选词")
-            return None
-        
-        # 3. 生成所有可能的组合
-        print("\n正在生成组合...")
+        # 将路径转换为完整句子
+        # 注意：路径已经通过动态规划确保到达终点，所以直接转换即可
         all_combinations = []
-        candidate_lists = [seg['candidates'] for seg in segment_candidates]
+        seen_sentences = set()  # 用于去重
+        target_pos = len(syllables)
         
-        # 限制组合数量，避免组合爆炸
-        total_combinations = 1
-        for cand_list in candidate_lists:
-            total_combinations *= len(cand_list)
-            if total_combinations > max_combinations:
-                # 如果组合太多，只取每个分段的前几个候选词
-                limited_lists = []
-                for cand_list in candidate_lists:
-                    limited_lists.append(cand_list[:max(1, max_combinations // len(candidate_lists))])
-                candidate_lists = limited_lists
-                break
+        for path in all_paths:
+            # 路径格式：[(start_pos, end_pos, word, rank), ...]
+            # 验证路径是否真的覆盖了从0到target_pos的所有位置
+            current_pos = 0
+            is_valid = True
+            
+            for start_pos, end_pos, word, rank in path:
+                # 检查路径是否连续
+                if start_pos != current_pos:
+                    is_valid = False
+                    break
+                # 更新当前位置
+                current_pos = end_pos
+            
+            # 路径验证通过：检查是否到达了终点
+            if is_valid and current_pos == target_pos:
+                sentence = ''.join(word for _, _, word, _ in path)
+                # 验证：句子长度应该合理
+                # 每个音节平均对应1-2个汉字，但也要考虑特殊情况（如"的"、"了"等助词）
+                # 设置一个合理的下限：至少70%的音节数，但不少于音节数-2
+                min_length = max(int(len(syllables) * 0.7), len(syllables) - 2)
+                
+                if len(sentence) >= min_length and sentence not in seen_sentences:
+                    seen_sentences.add(sentence)
+                    all_combinations.append(sentence)
+                # 如果句子太短，记录一下（用于调试）
+                elif len(sentence) < min_length:
+                    pass  # 句子太短，跳过
+            # 如果路径无效，跳过（不添加到结果中）
+        print(f"   ✓ 从词图生成 {len(all_combinations)} 个完整句子组合")
         
-        # 生成所有组合
-        for combination in product(*candidate_lists):
-            sentence = ''.join(combination)
-            all_combinations.append(sentence)
-            if len(all_combinations) >= max_combinations:
-                break
+        # 6.5. 合并 Rime 的完整候选词（去重 + 过滤不完整的）
+        if rime_full_candidates:
+            # 过滤：只保留真正完整的句子
+            # 完整句子的标准：长度应该至少覆盖大部分音节
+            # 每个音节平均对应1-2个汉字，所以完整句子长度应该 >= 音节数的80%
+            min_length_ratio = 0.8  # 至少覆盖80%的音节
+            min_length = max(int(len(syllables) * min_length_ratio), len(syllables) - 2)  # 至少80%或音节数-2
+            
+            # 过滤掉太短的候选词（可能是部分匹配）
+            filtered_rime_candidates = [
+                c for c in rime_full_candidates 
+                if len(c) >= min_length
+            ]
+            
+            if filtered_rime_candidates:
+                # 将 Rime 的候选词加入，但去重
+                graph_set = set(all_combinations)
+                new_from_rime = [c for c in filtered_rime_candidates if c not in graph_set]
+                if new_from_rime:
+                    print(f"   从 Rime 完整候选词中过滤后新增 {len(new_from_rime)} 个（原始 {len(rime_full_candidates)} 个，过滤掉 {len(rime_full_candidates) - len(filtered_rime_candidates)} 个不完整的）")
+                    all_combinations.extend(new_from_rime[:max_combinations // 2])  # 最多加入一半
+                else:
+                    print(f"   Rime 候选词已全部包含在词图生成的路径中")
+            else:
+                print(f"   Rime 候选词全部被过滤（太短，不完整）")
         
-        print(f"   ✓ 生成 {len(all_combinations)} 个组合")
+        # 限制总数量
+        if len(all_combinations) > max_combinations:
+            print(f"   组合过多，限制为前 {max_combinations} 个")
+            all_combinations = all_combinations[:max_combinations]
         
-        # 4. 输出所有生成的组合（用于调试）
-        print(f"\n生成的完整句子组合（前20个）:")
-        for i, combo in enumerate(all_combinations[:20], 1):
+        print(f"   ✓ 总共 {len(all_combinations)} 个完整句子组合（词图生成 + Rime 候选词）")
+        
+        # 输出前几个组合（用于调试，减少输出）
+        print(f"\n生成的完整句子组合（前10个）:")
+        for i, combo in enumerate(all_combinations, 1):
             print(f"   {i}. {combo}")
-        if len(all_combinations) > 20:
-            print(f"   ... 还有 {len(all_combinations) - 20} 个组合")
+
         
-        # 5. 使用 BERT 评估所有组合
+        # 检查是否包含"图书馆里的藏书"（忽略繁简）
+        target_sentences = [ "糧倉裏的倉鼠"]
+        found_target = [s for s in all_combinations if s in target_sentences]
+        if found_target:
+            print(f"\n   ✓ 找到目标句子: {found_target}")
+        else:
+            print(f"\n   ⚠ 未找到目标句子'图书馆里的藏书'（已检查 {len(all_combinations)} 个组合）")
+            # 检查是否有类似的句子
+            similar = [s for s in all_combinations if "圖書館" in s and "藏書" in s]
+            if similar:
+                print(f"   类似的句子: {similar[:5]}")
+        
+        # 7. 使用 BERT 评估所有组合
         print(f"\n使用 BERT 模型评估 {len(all_combinations)} 个完整句子...")
         start_time = time.time()
         
@@ -488,20 +586,30 @@ class RimeBertInputMethod:
         elapsed_time = (time.time() - start_time) * 1000
         print(f"   ✓ 评估完成（耗时: {elapsed_time:.2f} ms）")
         
-        # 6. 构建结果
-        # 将 segment_candidates 转换为 segments 格式用于显示
-        segments = [{'pinyin': seg['pinyin'], 'syllables': seg['syllables']} for seg in segment_candidates]
+        # 8. 构建结果
+        # 将词图转换为可显示的格式
+        word_graph_display = {}
+        for start_pos, edges in word_graph.items():
+            word_graph_display[start_pos] = {}
+            for end_pos, candidate_list in edges.items():
+                # candidate_list 是 [(word, rank), ...] 格式
+                candidates = [word for word, _ in candidate_list]
+                word_graph_display[start_pos][end_pos] = {
+                    'pinyin': ''.join(syllables[start_pos:end_pos]),
+                    'candidates': candidates[:3]  # 只保存前3个用于显示
+                }
         
         result = {
             'input_pinyin': pinyin_text,
             'rime_input': input_text,  # Rime 切分后的拼音
             'syllables': syllables,  # 音节列表
-            'segments': segments,  # 分段信息
-            'segment_candidates': segment_candidates,
+            'word_graph': word_graph_display,  # 词图信息（用于显示）
+            'rime_full_candidates_count': len(rime_full_candidates) if rime_full_candidates else 0,
+            'total_paths': len(all_paths),
             'total_combinations': len(all_combinations),
             'ranked_sentences': [],
             'scoring_time_ms': elapsed_time,
-            'method': 'segment_combination'  # 标记使用的方法
+            'method': 'word_graph_paths'  # 标记使用的方法
         }
         
         # 添加排序后的完整句子
@@ -627,13 +735,33 @@ class RimeBertInputMethod:
         print("整句输入结果（按流畅度排序）")
         print("=" * 70)
         print(f"输入拼音: {result['input_pinyin']}")
-        print(f"分段数量: {len(result['segments'])}")
-        print(f"生成组合: {result['total_combinations']} 个")
+        print(f"方法: {result.get('method', 'unknown')}")
+        if 'total_paths' in result:
+            print(f"词图生成路径: {result['total_paths']} 条")
+        if 'rime_full_candidates_count' in result and result['rime_full_candidates_count'] > 0:
+            print(f"Rime 完整候选词: {result['rime_full_candidates_count']} 个（已合并）")
+        print(f"总评估组合: {result['total_combinations']} 个")
         print(f"评估耗时: {result['scoring_time_ms']:.2f} ms")
         
-        print(f"\n分段信息:")
-        for i, seg in enumerate(result['segments']):
-            print(f"  分段 {i+1}: {seg['pinyin']}")
+        # 显示词图信息（如果存在）
+        if 'word_graph' in result and result['word_graph']:
+            print(f"\n词图信息:")
+            for start_pos, edges in sorted(result['word_graph'].items()):
+                for end_pos, info in sorted(edges.items()):
+                    pinyin = info.get('pinyin', '')
+                    candidates = info.get('candidates', [])
+                    candidates_str = ', '.join(candidates) if candidates else '无'
+                    print(f"   位置 {start_pos}->{end_pos} ({pinyin}): {candidates_str}")
+        
+        # 显示分段信息（如果存在）
+        if 'segments' in result and result['segments']:
+            print(f"\n分段信息:")
+            for i, seg in enumerate(result['segments']):
+                print(f"  分段 {i+1}: {seg.get('pinyin', '')}")
+        
+        # 显示音节信息
+        if 'syllables' in result and result['syllables']:
+            print(f"\n音节列表: {' '.join(result['syllables'])}")
         
         print(f"\n前 {min(top_n, len(result['ranked_sentences']))} 个完整句子：")
         print("-" * 70)
@@ -734,8 +862,8 @@ def demo_basic_usage():
         
         # 测试用例
         test_cases = [
-            "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
-            # "tushuguanlidecangshu",  # 图书馆里的藏书
+            # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
+            "tushuguanlidecangshu",  # 图书馆里的藏书
             # "congmingdeshurufa",     # 聪明的输入法
             
         ]
@@ -772,17 +900,18 @@ def demo_sentence_input():
         
         # 测试用例（整句拼音，无空格）
         test_cases = [
-            "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
+            # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
             # "congmingdeshurufa",           # 聪明的输入法
             # "tushuguanlidecangshu",        # 图书馆里的藏书
+            "liangcanglidecangshu",        # 粮仓里的仓鼠
             
         ]
         
         for pinyin in test_cases:
             result = input_method.input_sentence_pinyin(
                 pinyin,
-                max_segment_candidates=5,  # 每个分段最多5个候选词
-                max_combinations=50        # 最多评估50个组合
+                max_segment_candidates=3,  # 每个分段最多3个候选词（词图构建时只取前2个）
+                max_combinations=30        # 最多评估30个组合（减少无效路径）
             )
             if result:
                 input_method.display_sentence_results(result, top_n=10)

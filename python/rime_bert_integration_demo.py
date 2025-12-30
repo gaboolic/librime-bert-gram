@@ -769,14 +769,14 @@ class RimeBertInputMethod:
         print(f"评估耗时: {result['scoring_time_ms']:.2f} ms")
         
         # 显示词图信息（如果存在）
-        if 'word_graph' in result and result['word_graph']:
-            print(f"\n词图信息:")
-            for start_pos, edges in sorted(result['word_graph'].items()):
-                for end_pos, info in sorted(edges.items()):
-                    pinyin = info.get('pinyin', '')
-                    candidates = info.get('candidates', [])
-                    candidates_str = ', '.join(candidates) if candidates else '无'
-                    print(f"   位置 {start_pos}->{end_pos} ({pinyin}): {candidates_str}")
+        # if 'word_graph' in result and result['word_graph']:
+        #     print(f"\n词图信息:")
+        #     for start_pos, edges in sorted(result['word_graph'].items()):
+        #         for end_pos, info in sorted(edges.items()):
+        #             pinyin = info.get('pinyin', '')
+        #             candidates = info.get('candidates', [])
+        #             candidates_str = ', '.join(candidates) if candidates else '无'
+        #             print(f"   位置 {start_pos}->{end_pos} ({pinyin}): {candidates_str}")
         
         # 显示分段信息（如果存在）
         if 'segments' in result and result['segments']:
@@ -869,45 +869,8 @@ class RimeBertInputMethod:
         print("\n资源已清理")
 
 
-def demo_basic_usage():
-    """基本使用示例（单次输入，不分段）"""
-    print("\n" + "=" * 70)
-    print("基本使用示例（单次输入）")
-    print("=" * 70)
-    
-    # 初始化
-    input_method = RimeBertInputMethod(
-        bert_model_name='bert-base-chinese',
-        use_mlm_model=True
-    )
-    
-    try:
-        # 创建会话
-        input_method.create_session()
-        
-        # 测试用例
-        test_cases = [
-            # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
-            "tushuguanlidecangshu",  # 图书馆里的藏书
-            # "congmingdeshurufa",     # 聪明的输入法
-            
-        ]
-        
-        for pinyin in test_cases:
-            result = input_method.input_pinyin(pinyin)
-            if result:
-                input_method.display_results(result, top_n=5)
-            print("\n")
-        
-    except Exception as e:
-        print(f"\n错误: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        input_method.finalize()
 
-
-def demo_sentence_input():
+def demo_sentence_input(bert_model_name='bert-base-chinese'):
     """整句输入示例（自动分段）"""
     print("\n" + "=" * 70)
     print("整句输入示例（自动分段 + BERT 评估）")
@@ -916,7 +879,7 @@ def demo_sentence_input():
     # 初始化（使用 rime_frost 输入方案）
     # 如果需要使用默认的 luna_pinyin，可以不传 schema_name 参数
     input_method = RimeBertInputMethod(
-        bert_model_name='bert-base-chinese',
+        bert_model_name=bert_model_name,
         use_mlm_model=True,
         schema_name='rime_frost'  # 使用 rime_frost 方案，默认是 luna_pinyin
     )
@@ -929,10 +892,11 @@ def demo_sentence_input():
         test_cases = [
             # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
             # "congmingdeshurufa",           # 聪明的输入法
-            "tushuguanlidecangshu",        # 图书馆里的藏书
+            # "tushuguanlidecangshu",        # 图书馆里的藏书
             # "liangcanglidecangshu",        # 粮仓里的仓鼠
             # "haerbinzhidongbuzaijimo",
-            
+            # "muqianhexifuquanzhijujiazuokuajingxiaoshuochuhai",
+            "youshijianyidingshiyongyixia"
         ]
         
         for pinyin in test_cases:
@@ -953,7 +917,7 @@ def demo_sentence_input():
         input_method.finalize()
 
 
-def demo_interactive():
+def demo_interactive(bert_model_name='bert-base-chinese'):
     """交互式示例"""
     print("\n" + "=" * 70)
     print("交互式输入示例")
@@ -961,7 +925,7 @@ def demo_interactive():
     
     # 初始化
     input_method = RimeBertInputMethod(
-        bert_model_name='bert-base-chinese',
+        bert_model_name=bert_model_name,
         use_mlm_model=True
     )
     
@@ -1006,7 +970,7 @@ def demo_interactive():
         input_method.finalize()
 
 
-def demo_comparison():
+def demo_comparison(bert_model_name='bert-base-chinese'):
     """对比示例：显示原始排序 vs BERT 排序"""
     print("\n" + "=" * 70)
     print("对比示例：原始排序 vs BERT 排序")
@@ -1014,7 +978,7 @@ def demo_comparison():
     
     # 初始化
     input_method = RimeBertInputMethod(
-        bert_model_name='bert-base-chinese',
+        bert_model_name=bert_model_name,
         use_mlm_model=True
     )
     
@@ -1051,23 +1015,25 @@ def demo_comparison():
 if __name__ == "__main__":
     import argparse
     
+    # bert_model_name='bert-base-chinese'   基础BERT模型
+    # 或 bert_model_name='ckiplab/bert-tiny-chinese', 蒸馏的小BERT模型（速度快但是效果不好）
+
     parser = argparse.ArgumentParser(description='Rime + BERT 整句输入法演示')
     parser.add_argument('--mode', type=str,
-                       choices=['basic', 'sentence', 'interactive', 'comparison'],
+                       choices=[ 'sentence', 'interactive', 'comparison'],
                        default='sentence',
-                       help='运行模式: basic (基本示例), sentence (整句输入), interactive (交互式), comparison (对比示例)')
+                       help='运行模式:  sentence (整句输入), interactive (交互式), comparison (对比示例)')
     parser.add_argument('--model', type=str,
                        default='bert-base-chinese',
                        help='BERT 模型名称（默认: bert-base-chinese）')
     
     args = parser.parse_args()
+    print("args: "+str(args))
     
-    if args.mode == 'basic':
-        demo_basic_usage()
-    elif args.mode == 'sentence':
-        demo_sentence_input()
+    if args.mode == 'sentence':
+        demo_sentence_input(bert_model_name=args.model)
     elif args.mode == 'interactive':
-        demo_interactive()
+        demo_interactive(bert_model_name=args.model)
     elif args.mode == 'comparison':
-        demo_comparison()
+        demo_comparison(bert_model_name=args.model)
 

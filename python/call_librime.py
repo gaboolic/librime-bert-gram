@@ -977,72 +977,9 @@ class RimeDllWrapper:
                 else:
                     if debug_mode:
                         print(f"   调试: 无候选词 (candidates={context.menu.candidates}, num={context.menu.num_candidates})")
-                if debug_mode:
-                    print(f"   调试: 开始提取 {num_candidates} 个候选词")
-                    # 检查指针的实际值
-                    try:
-                        ptr_value = ctypes.cast(candidates_ptr, ctypes.c_void_p).value
-                        print(f"   调试: 指针值 = {hex(ptr_value) if ptr_value else 'NULL'}")
-                    except:
-                        pass
-                
-                # candidates 是指向 RimeCandidate 数组的指针，需要正确访问
-                # 方法1: 直接使用指针索引访问
-                try:
-                    # 将指针转换为指向单个 RimeCandidate 的指针
-                    candidate_ptr_type = ctypes.POINTER(RimeCandidate)
-                    base_ptr = ctypes.cast(candidates_ptr, candidate_ptr_type)
-                    
-                    for i in range(num_candidates):
-                        try:
-                            # 通过指针偏移访问数组元素
-                            cand = base_ptr[i]
-                            text = cand.text.decode('utf-8') if cand.text else ""
-                            comment = cand.comment.decode('utf-8') if cand.comment else ""
-                            candidates.append({
-                                'text': text,
-                                'comment': comment
-                            })
-                            if debug_mode:
-                                print(f"   调试: 候选词 {i+1}: {text}")
-                        except Exception as e:
-                            if debug_mode:
-                                print(f"   调试: 提取候选词 {i} 失败: {e}")
-                                import traceback
-                                traceback.print_exc()
-                            break
-                except Exception as e:
-                    if debug_mode:
-                        print(f"   调试: 方法1失败，尝试方法2: {e}")
-                    # 方法2: 使用数组类型转换
-                    try:
-                        candidates_array = ctypes.cast(
-                            candidates_ptr,
-                            ctypes.POINTER(RimeCandidate * num_candidates)
-                        ).contents
-                        
-                        for i in range(num_candidates):
-                            try:
-                                cand = candidates_array[i]
-                                text = cand.text.decode('utf-8') if cand.text else ""
-                                comment = cand.comment.decode('utf-8') if cand.comment else ""
-                                candidates.append({
-                                    'text': text,
-                                    'comment': comment
-                                })
-                                if debug_mode:
-                                    print(f"   调试: 候选词 {i+1}: {text}")
-                            except Exception as e2:
-                                if debug_mode:
-                                    print(f"   调试: 提取候选词 {i} 失败: {e2}")
-                                break
-                    except Exception as e2:
-                        if debug_mode:
-                            print(f"   调试: 方法2也失败: {e2}")
-                            import traceback
-                            traceback.print_exc()
             else:
-                print(f"   调试: 无候选词 (candidates={context.menu.candidates}, num={context.menu.num_candidates})")
+                if debug_mode:
+                    print(f"   调试: 无候选词 (candidates={context.menu.candidates}, num={context.menu.num_candidates})")
             
             result = {
                 'input': input_text,

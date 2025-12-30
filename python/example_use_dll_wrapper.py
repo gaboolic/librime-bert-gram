@@ -69,7 +69,8 @@ def example_basic_usage():
             # 应该使用全小写拼音，参考命令行工具的成功示例
             # 命令行工具输入: "congmingdeshurufa" 可以正常工作
             test_inputs = [
-                "congmingdeshurufa",  # 全小写，无空格（推荐）
+                "gegeguojiayougegeguojiadeguoge",
+                "tushuguanlidecangshu",  # 全小写，无空格（推荐）
                 "congmingdeRimeshurufa",  # 有大写字母（可能有问题）
             ]
             

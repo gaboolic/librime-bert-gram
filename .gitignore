@@ -41,3 +41,6 @@
 *.dwo
 
 build/
+python/__pycache__/
+python/__pycache__/call_librime.cpython-312.pyc
+python/__pycache__/call_librime.cpython-312.pyc

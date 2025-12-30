@@ -18,7 +18,7 @@ from itertools import product
 class RimeBertInputMethod:
     """结合 Rime 和 BERT 的输入法"""
     
-    def __init__(self, rime_dll_path=None, bert_model_name='bert-base-chinese', use_mlm_model=True, schema_name='luna_pinyin'):
+    def __init__(self, rime_dll_path=None, bert_model_name='bert-base-chinese', use_mlm_model=True, schema_name='luna_pinyin', device=None):
         """
         初始化输入法
         
@@ -27,6 +27,7 @@ class RimeBertInputMethod:
             bert_model_name: BERT 模型名称
             use_mlm_model: 是否使用 MLM 模型
             schema_name: 输入方案名称（默认：luna_pinyin，可传入 rime_frost 等）
+            device: 设备（'cuda', 'cpu' 或 None，None 时自动检测 GPU）
         """
         print("=" * 70)
         print("初始化 Rime + BERT 输入法")
@@ -76,7 +77,8 @@ class RimeBertInputMethod:
         print("   提示：首次运行会下载模型，请耐心等待...")
         self.scorer = InputMethodScorer(
             model_name=bert_model_name,
-            use_mlm_model=use_mlm_model
+            use_mlm_model=use_mlm_model,
+            device=device
         )
         print("   ✓ BERT 评分器初始化完成")
         
@@ -870,7 +872,7 @@ class RimeBertInputMethod:
 
 
 
-def demo_sentence_input(bert_model_name='bert-base-chinese'):
+def demo_sentence_input(bert_model_name='bert-base-chinese', device=None):
     """整句输入示例（自动分段）"""
     print("\n" + "=" * 70)
     print("整句输入示例（自动分段 + BERT 评估）")
@@ -881,7 +883,8 @@ def demo_sentence_input(bert_model_name='bert-base-chinese'):
     input_method = RimeBertInputMethod(
         bert_model_name=bert_model_name,
         use_mlm_model=True,
-        schema_name='rime_frost'  # 使用 rime_frost 方案，默认是 luna_pinyin
+        schema_name='rime_frost',  # 使用 rime_frost 方案，默认是 luna_pinyin
+        device=device
     )
     
     try:
@@ -893,10 +896,10 @@ def demo_sentence_input(bert_model_name='bert-base-chinese'):
             # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
             # "congmingdeshurufa",           # 聪明的输入法
             # "tushuguanlidecangshu",        # 图书馆里的藏书
-            # "liangcanglidecangshu",        # 粮仓里的仓鼠
+            "liangcanglidecangshu",        # 粮仓里的仓鼠
             # "haerbinzhidongbuzaijimo",
             # "muqianhexifuquanzhijujiazuokuajingxiaoshuochuhai",
-            "youshijianyidingshiyongyixia"
+            # "youshijianyidingshiyongyixia"
         ]
         
         for pinyin in test_cases:
@@ -917,7 +920,7 @@ def demo_sentence_input(bert_model_name='bert-base-chinese'):
         input_method.finalize()
 
 
-def demo_interactive(bert_model_name='bert-base-chinese'):
+def demo_interactive(bert_model_name='bert-base-chinese', device=None):
     """交互式示例"""
     print("\n" + "=" * 70)
     print("交互式输入示例")
@@ -926,7 +929,8 @@ def demo_interactive(bert_model_name='bert-base-chinese'):
     # 初始化
     input_method = RimeBertInputMethod(
         bert_model_name=bert_model_name,
-        use_mlm_model=True
+        use_mlm_model=True,
+        device=device
     )
     
     try:
@@ -970,7 +974,7 @@ def demo_interactive(bert_model_name='bert-base-chinese'):
         input_method.finalize()
 
 
-def demo_comparison(bert_model_name='bert-base-chinese'):
+def demo_comparison(bert_model_name='bert-base-chinese', device=None):
     """对比示例：显示原始排序 vs BERT 排序"""
     print("\n" + "=" * 70)
     print("对比示例：原始排序 vs BERT 排序")
@@ -979,7 +983,8 @@ def demo_comparison(bert_model_name='bert-base-chinese'):
     # 初始化
     input_method = RimeBertInputMethod(
         bert_model_name=bert_model_name,
-        use_mlm_model=True
+        use_mlm_model=True,
+        device=device
     )
     
     try:
@@ -1026,14 +1031,21 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str,
                        default='bert-base-chinese',
                        help='BERT 模型名称（默认: bert-base-chinese）')
+    parser.add_argument('--device', type=str,
+                       choices=['cuda', 'cpu', 'auto'],
+                       default='auto',
+                       help='计算设备: cuda (GPU), cpu (CPU), auto (自动检测，默认)')
     
     args = parser.parse_args()
     print("args: "+str(args))
     
+    # 处理设备参数
+    device = None if args.device == 'auto' else args.device
+    
     if args.mode == 'sentence':
-        demo_sentence_input(bert_model_name=args.model)
+        demo_sentence_input(bert_model_name=args.model, device=device)
     elif args.mode == 'interactive':
-        demo_interactive(bert_model_name=args.model)
+        demo_interactive(bert_model_name=args.model, device=device)
     elif args.mode == 'comparison':
-        demo_comparison(bert_model_name=args.model)
+        demo_comparison(bert_model_name=args.model, device=device)
 

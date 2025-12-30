@@ -12,7 +12,7 @@ import numpy as np
 class InputMethodScorer:
     """输入法句子流畅度评分器（改进版）"""
     
-    def __init__(self, model_name='bert-base-chinese', use_mlm_model=True):
+    def __init__(self, model_name='bert-base-chinese', use_mlm_model=True, device=None):
         """
         初始化评分器
         
@@ -21,13 +21,32 @@ class InputMethodScorer:
                 - 'bert-base-chinese': 中文BERT模型（推荐）
                 - 'huawei-noah/TinyBERT_General_4L_312D': TinyBERT模型
             use_mlm_model: 是否使用MLM模型（True使用BertForMaskedLM，False使用BertModel）
+            device: 设备（'cuda', 'cpu' 或 None，None 时自动检测）
         """
-        print(f"正在加载模型: {model_name}")
+        # 自动检测设备
+        if device is None:
+            if torch.cuda.is_available():
+                device = 'cuda'
+                print(f"检测到 GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                device = 'cpu'
+                print("未检测到 GPU，使用 CPU")
+        else:
+            if device == 'cuda' and not torch.cuda.is_available():
+                print("警告: 指定了 CUDA 但 GPU 不可用，回退到 CPU")
+                device = 'cpu'
+        
+        self.device = torch.device(device)
+        print(f"正在加载模型: {model_name} (设备: {self.device})")
+        
         self.tokenizer = BertTokenizer.from_pretrained(model_name)
         if use_mlm_model:
             self.model = BertForMaskedLM.from_pretrained(model_name)
         else:
             self.model = BertModel.from_pretrained(model_name)
+        
+        # 将模型移动到指定设备
+        self.model = self.model.to(self.device)
         self.model.eval()
         self.use_mlm_model = use_mlm_model
         print("模型加载完成！")
@@ -48,8 +67,9 @@ class InputMethodScorer:
         # 对句子进行编码
         inputs = self.tokenizer(sentence, return_tensors="pt", 
                                 padding=True, truncation=True, max_length=512)
-        input_ids = inputs['input_ids'][0]
-        attention_mask = inputs['attention_mask'][0]
+        # 将输入移动到设备
+        input_ids = inputs['input_ids'][0].to(self.device)
+        attention_mask = inputs['attention_mask'][0].to(self.device)
         
         total_log_prob = 0.0
         valid_tokens = 0
@@ -117,6 +137,8 @@ class InputMethodScorer:
         # 对句子进行编码
         inputs = self.tokenizer(sentence, return_tensors="pt", 
                                 padding=True, truncation=True, max_length=512)
+        # 将输入移动到设备
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -251,7 +273,8 @@ def main():
     print("=" * 60)
     print("初始化输入法流畅度评分器（使用中文BERT）")
     print("=" * 60)
-    scorer = InputMethodScorer(model_name='bert-base-chinese', use_mlm_model=True)
+    # 自动检测并使用 GPU（如果可用）
+    scorer = InputMethodScorer(model_name='bert-base-chinese', use_mlm_model=True, device=None)
     
     # 示例1：用户提供的例子
     print("\n" + "=" * 60)

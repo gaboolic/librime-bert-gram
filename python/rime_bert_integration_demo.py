@@ -18,7 +18,7 @@ from itertools import product
 class RimeBertInputMethod:
     """结合 Rime 和 BERT 的输入法"""
     
-    def __init__(self, rime_dll_path=None, bert_model_name='bert-base-chinese', use_mlm_model=True):
+    def __init__(self, rime_dll_path=None, bert_model_name='bert-base-chinese', use_mlm_model=True, schema_name='luna_pinyin'):
         """
         初始化输入法
         
@@ -26,6 +26,7 @@ class RimeBertInputMethod:
             rime_dll_path: rime.dll 的路径，如果为 None 会自动查找
             bert_model_name: BERT 模型名称
             use_mlm_model: 是否使用 MLM 模型
+            schema_name: 输入方案名称（默认：luna_pinyin，可传入 rime_frost 等）
         """
         print("=" * 70)
         print("初始化 Rime + BERT 输入法")
@@ -33,15 +34,34 @@ class RimeBertInputMethod:
         
         # 初始化 Rime
         print("\n[1/2] 初始化 Rime...")
-        self.rime = RimeDllWrapper(dll_path=rime_dll_path)
-        print(f"   ✓ 找到 rime.dll: {self.rime.dll_path}")
         
-        # 设置数据目录
-        dll_dir = os.path.dirname(self.rime.dll_path)  # build/bin/Release
-        data_dir = os.path.dirname(dll_dir)  # build/bin
+        # 设置 DLL 和数据文件路径（在创建 RimeDllWrapper 之前）
+        dll_dir = r"D:\Program Files\Rime\weasel-0.16.3"
+        data_dir = r"D:\vscode\rime-frost"  # 使用指定的数据目录
         
         print(f"   DLL 目录: {dll_dir}")
         print(f"   数据目录: {data_dir}")
+        
+        # 查找 rime.dll（优先使用指定路径）
+        if rime_dll_path:
+            # 如果用户提供了 DLL 路径，直接使用
+            dll_path = rime_dll_path
+        else:
+            # 否则尝试在 dll_dir 中查找
+            dll_path = os.path.join(dll_dir, "rime.dll")
+            if not os.path.exists(dll_path):
+                # 如果指定路径不存在，设置为 None 让 RimeDllWrapper 自动查找
+                dll_path = None
+        
+        # 创建 RimeDllWrapper 实例
+        if dll_path and os.path.exists(dll_path):
+            # 使用指定的 DLL 路径
+            self.rime = RimeDllWrapper(dll_path=dll_path)
+            print(f"   ✓ 找到 rime.dll: {self.rime.dll_path}")
+        else:
+            # 回退到自动查找（如果用户提供了路径但不存在，也使用自动查找）
+            self.rime = RimeDllWrapper(dll_path=None)
+            print(f"   ✓ 找到 rime.dll: {self.rime.dll_path}")
         
         # 初始化 Rime
         self.rime.initialize(
@@ -60,18 +80,23 @@ class RimeBertInputMethod:
         )
         print("   ✓ BERT 评分器初始化完成")
         
+        # 保存默认输入方案
+        self.default_schema_name = schema_name
+        
         self.session_id = None
         print("\n" + "=" * 70)
         print("初始化完成！")
         print("=" * 70)
     
-    def create_session(self, schema_name="luna_pinyin"):
+    def create_session(self, schema_name=None):
         """
         创建输入会话
         
         Args:
-            schema_name: 输入方案名称（默认：luna_pinyin）
+            schema_name: 输入方案名称（如果为 None，使用初始化时设置的默认方案）
         """
+        if schema_name is None:
+            schema_name = self.default_schema_name
         if self.session_id:
             self.destroy_session()
         
@@ -107,7 +132,7 @@ class RimeBertInputMethod:
             return self.create_session()
         
         # 在销毁前获取当前方案
-        schema_name = self.rime.get_current_schema(self.session_id) or "luna_pinyin"
+        schema_name = self.rime.get_current_schema(self.session_id) or self.default_schema_name
         
         # 销毁并重新创建会话，确保输入状态完全清除
         self.destroy_session()
@@ -220,7 +245,7 @@ class RimeBertInputMethod:
         
         # 重要：每次获取候选词前，先清除之前的输入
         # 保存当前方案
-        schema_name = self.rime.get_current_schema(self.session_id) or "luna_pinyin"
+        schema_name = self.rime.get_current_schema(self.session_id) or self.default_schema_name
         self.destroy_session()
         if not self.create_session(schema_name):
             return []
@@ -239,7 +264,7 @@ class RimeBertInputMethod:
         
         return candidate_texts
     
-    def input_sentence_pinyin(self, pinyin_text: str, max_segment_candidates: int = 3, 
+    def input_sentence_pinyin(self, pinyin_text: str, max_segment_candidates: int = 5, 
                              max_combinations: int = 30) -> Optional[Dict]:
         """
         整句输入：参考 MakeSentence 逻辑，构建词图，生成所有可能的路径，用 BERT 评估
@@ -250,13 +275,13 @@ class RimeBertInputMethod:
         3. 使用 BERT 评估所有路径，找到最合理的整句
         
         优化点：
-        - 词图构建时每个分段只取前2个候选词（减少组合爆炸）
+        - 词图构建时根据分段长度动态调整候选词数量（单字2个，双字词5个，3音节以上5个）
         - 路径生成时使用Rime排序评分，优先保留高质量路径
-        - 每个位置最多保留20条路径（而不是50+条）
+        - 每个位置最多保留50条路径（可配置）
         
         Args:
             pinyin_text: 整句拼音（全小写，无空格，例如："gegeguojiayougegeguojiadeguoge"）
-            max_segment_candidates: 每个分段最多考虑的候选词数量（词图构建时实际只取前2个）
+            max_segment_candidates: 每个分段最多考虑的候选词数量（根据分段长度动态调整：单字2个，双字词5个，3音节以上5个）
             max_combinations: 最多评估的组合数量（避免组合爆炸，默认30）
         
         Returns:
@@ -342,8 +367,8 @@ class RimeBertInputMethod:
                 if length == 1:
                     max_candidates_for_segment = min(2, max_segment_candidates)
                 elif length == 2:
-                    # 双字词：取前3-4个，因为双字词很重要且数量相对较少
-                    max_candidates_for_segment = min(4, max_segment_candidates)
+                    # 双字词：取前5个，因为双字词很重要且数量相对较少
+                    max_candidates_for_segment = min(5, max_segment_candidates)
                 else:
                     # 3个音节以上：取更多候选词
                     max_candidates_for_segment = min(5, max_segment_candidates)
@@ -353,7 +378,7 @@ class RimeBertInputMethod:
                 if candidates:
                     # 存储候选词及其在Rime中的排序（用于后续路径评分）
                     word_graph[start_pos][end_pos] = [(cand, i) for i, cand in enumerate(candidates)]
-                    print(f"   位置 {start_pos}->{end_pos} ({segment_pinyin}, 长度{length}): {len(candidates)} 个候选词")
+                    # print(f"   位置 {start_pos}->{end_pos} ({segment_pinyin}, 长度{length}): {len(candidates)} 个候选词")
         
         # 打印词图信息（包含候选词详情，用于调试）
         print(f"\n词图构建完成:")
@@ -361,13 +386,13 @@ class RimeBertInputMethod:
         print(f"   顶点数: {len(word_graph)}")
         print(f"   边数: {total_edges}")
         # 打印关键位置的候选词（用于调试）
-        print(f"\n关键位置的候选词详情:")
-        for start_pos in sorted(word_graph.keys()):
-            for end_pos in sorted(word_graph[start_pos].keys()):
-                candidates = word_graph[start_pos][end_pos]
-                candidate_texts = [f"{word}(rank:{rank})" for word, rank in candidates]
-                pinyin = ''.join(syllables[start_pos:end_pos])
-                print(f"   位置 {start_pos}->{end_pos} ({pinyin}): {', '.join(candidate_texts)}")
+        # print(f"\n关键位置的候选词详情:")
+        # for start_pos in sorted(word_graph.keys()):
+        #     for end_pos in sorted(word_graph[start_pos].keys()):
+        #         candidates = word_graph[start_pos][end_pos]
+        #         candidate_texts = [f"{word}(rank:{rank})" for word, rank in candidates]
+        #         pinyin = ''.join(syllables[start_pos:end_pos])
+        #         print(f"   位置 {start_pos}->{end_pos} ({pinyin}): {', '.join(candidate_texts)}")
         
         # 6. 生成所有可能的路径（从位置0到位置len(syllables)）
         # 使用动态规划 + 限制每个位置的路径数量（类似 Beam Search）
@@ -465,8 +490,8 @@ class RimeBertInputMethod:
             print(f"   生成 {len(all_paths)} 条完整路径（到达终点位置 {target_pos}）")
             # 调试：只显示前10条路径（减少输出）
             if len(all_paths) > 0:
-                print(f"   前10条路径详情:")
-                for i, path in enumerate(all_paths[:10], 1):
+                print(f"   前30条路径详情:")
+                for i, path in enumerate(all_paths[:30], 1):
                     path_str = ' -> '.join([f"{start}->{end}({word})" for start, end, word, _ in path])
                     sentence = ''.join(word for _, _, word, _ in path)
                     score = calculate_path_score(path)
@@ -560,22 +585,22 @@ class RimeBertInputMethod:
         print(f"   ✓ 总共 {len(all_combinations)} 个完整句子组合（词图生成 + Rime 候选词）")
         
         # 输出前几个组合（用于调试，减少输出）
-        print(f"\n生成的完整句子组合（前10个）:")
-        for i, combo in enumerate(all_combinations, 1):
-            print(f"   {i}. {combo}")
+        # print(f"\n生成的完整句子组合（前10个）:")
+        # for i, combo in enumerate(all_combinations, 1):
+        #     print(f"   {i}. {combo}")
 
         
         # 检查是否包含"图书馆里的藏书"（忽略繁简）
-        target_sentences = [ "糧倉裏的倉鼠"]
-        found_target = [s for s in all_combinations if s in target_sentences]
-        if found_target:
-            print(f"\n   ✓ 找到目标句子: {found_target}")
-        else:
-            print(f"\n   ⚠ 未找到目标句子'图书馆里的藏书'（已检查 {len(all_combinations)} 个组合）")
-            # 检查是否有类似的句子
-            similar = [s for s in all_combinations if "圖書館" in s and "藏書" in s]
-            if similar:
-                print(f"   类似的句子: {similar[:5]}")
+        # target_sentences = [ "糧倉裏的倉鼠"]
+        # found_target = [s for s in all_combinations if s in target_sentences]
+        # if found_target:
+        #     print(f"\n   ✓ 找到目标句子: {found_target}")
+        # else:
+        #     print(f"\n   ⚠ 未找到目标句子'图书馆里的藏书'（已检查 {len(all_combinations)} 个组合）")
+        #     # 检查是否有类似的句子
+        #     similar = [s for s in all_combinations if "圖書館" in s and "藏書" in s]
+        #     if similar:
+        #         print(f"   类似的句子: {similar[:5]}")
         
         # 7. 使用 BERT 评估所有组合
         print(f"\n使用 BERT 模型评估 {len(all_combinations)} 个完整句子...")
@@ -888,10 +913,12 @@ def demo_sentence_input():
     print("整句输入示例（自动分段 + BERT 评估）")
     print("=" * 70)
     
-    # 初始化
+    # 初始化（使用 rime_frost 输入方案）
+    # 如果需要使用默认的 luna_pinyin，可以不传 schema_name 参数
     input_method = RimeBertInputMethod(
         bert_model_name='bert-base-chinese',
-        use_mlm_model=True
+        use_mlm_model=True,
+        schema_name='rime_frost'  # 使用 rime_frost 方案，默认是 luna_pinyin
     )
     
     try:
@@ -902,15 +929,16 @@ def demo_sentence_input():
         test_cases = [
             # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
             # "congmingdeshurufa",           # 聪明的输入法
-            # "tushuguanlidecangshu",        # 图书馆里的藏书
-            "liangcanglidecangshu",        # 粮仓里的仓鼠
+            "tushuguanlidecangshu",        # 图书馆里的藏书
+            # "liangcanglidecangshu",        # 粮仓里的仓鼠
+            # "haerbinzhidongbuzaijimo",
             
         ]
         
         for pinyin in test_cases:
             result = input_method.input_sentence_pinyin(
                 pinyin,
-                max_segment_candidates=3,  # 每个分段最多3个候选词（词图构建时只取前2个）
+                max_segment_candidates=5,  # 每个分段最多5个候选词（根据分段长度动态调整）
                 max_combinations=30        # 最多评估30个组合（减少无效路径）
             )
             if result:

@@ -16,23 +16,31 @@ def example_basic_usage():
     print("=" * 60)
     
     try:
-        # 1. 创建包装器实例（自动查找 rime.dll）
+        # 1. 创建包装器实例（使用指定的 DLL 路径）
         print("\n1. 创建 RimeDllWrapper 实例...")
-        rime = RimeDllWrapper()
-        print(f"   ✓ 找到 rime.dll: {rime.dll_path}")
+        # 指定 DLL 和数据文件路径
+        dll_dir = r"D:\Program Files\Rime\weasel-0.16.3"
+        data_dir = r"D:\vscode\rime-frost"  # 使用指定的数据目录
+        
+        # 查找 rime.dll（可能在 dll_dir 目录中）
+        dll_path = os.path.join(dll_dir, "rime.dll")
+        if not os.path.exists(dll_path):
+            # 如果直接路径不存在，尝试自动查找
+            rime = RimeDllWrapper()
+            print(f"   ✓ 找到 rime.dll: {rime.dll_path}")
+        else:
+            rime = RimeDllWrapper(dll_path=dll_path)
+            print(f"   ✓ 找到 rime.dll: {rime.dll_path}")
         
         # 2. 初始化 Rime
         print("\n2. 初始化 Rime...")
-        # 数据文件在 build/bin/ 目录，而 DLL 在 build/bin/Release/ 目录
-        # 需要将数据目录指向 build/bin/（DLL 的父目录）
-        dll_dir = os.path.dirname(rime.dll_path)  # build/bin/Release
-        data_dir = os.path.dirname(dll_dir)  # build/bin
         
         print(f"   DLL 目录: {dll_dir}")
         print(f"   数据目录: {data_dir}")
         
         # 检查数据文件
-        schema_file = os.path.join(data_dir, 'luna_pinyin.schema.yaml')
+        # schema_file = os.path.join(data_dir, 'luna_pinyin.schema.yaml')
+        schema_file = os.path.join(data_dir, 'rime_frost.schema.yaml')
         if os.path.exists(schema_file):
             print(f"   ✓ 找到数据文件: {schema_file}")
         else:
@@ -168,6 +176,8 @@ def example_with_custom_path():
     
     # 手动指定 DLL 路径
     dll_path = r"D:\vscode\rime_projs\librime\build\bin\Release\rime.dll"
+
+    
     
     try:
         rime = RimeDllWrapper(dll_path=dll_path)

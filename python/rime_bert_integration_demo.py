@@ -896,10 +896,11 @@ def demo_sentence_input(bert_model_name='bert-base-chinese', device=None):
             # "gegeguojiayougegeguojiadeguoge",  # 各个国家有各个国家的国歌
             # "congmingdeshurufa",           # 聪明的输入法
             # "tushuguanlidecangshu",        # 图书馆里的藏书
-            "liangcanglidecangshu",        # 粮仓里的仓鼠
+            # "liangcanglidecangshu",        # 粮仓里的仓鼠
             # "haerbinzhidongbuzaijimo",
             # "muqianhexifuquanzhijujiazuokuajingxiaoshuochuhai",
             # "youshijianyidingshiyongyixia"
+            "zuixinfabiaodekoufuyingyangjigongshizhongjiumingqueshuoming"
         ]
         
         for pinyin in test_cases:

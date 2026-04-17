@@ -165,9 +165,9 @@ BertGrammar::BertGrammar(Config* config)
     return;
   }
   
-  // Load configuration
-  config->GetString("bert_grammar/model_path", &model_path_);
-  config->GetString("bert_grammar/vocab_path", &vocab_path_);
+  // Read model paths from the standard grammar namespace.
+  config->GetString("grammar/model_path", &model_path_);
+  config->GetString("grammar/vocab_path", &vocab_path_);
   
   // If paths are relative, resolve them relative to shared data dir
   if (!model_path_.empty() && model_path_[0] != '/' && model_path_[1] != ':') {

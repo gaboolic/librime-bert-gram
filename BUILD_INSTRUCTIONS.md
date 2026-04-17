@@ -44,27 +44,53 @@ brew install onnxruntime
 
 ## 编译步骤
 
-### 1. 配置 CMake
+### Windows: 构建独立插件 DLL
 
-在 librime 的构建目录中：
+Windows 下推荐直接使用仓库根目录的脚本：
+
+```powershell
+.\build_plugin_windows.ps1 `
+  -LibrimeRoot ..\librime `
+  -OnnxRuntimeRoot C:\onnxruntime `
+  -Config Release
+```
+
+这个脚本会：
+
+1. 把当前仓库通过 junction 暂挂到 `librime/plugins/bert_grammar`
+2. 用下面的关键选项重新配置 `librime`
+   - `BUILD_SHARED_LIBS=ON`
+   - `ENABLE_EXTERNAL_PLUGINS=ON`
+   - `BUILD_MERGED_PLUGINS=OFF`
+3. 编译目标 `rime-bert-grammar`
+
+构建成功后，独立插件 DLL 通常输出到：
+
+- `build-bert-grammar/bin/rime-plugins/rime-bert-grammar.dll`
+- 或 `build-bert-grammar/lib/rime-plugins/rime-bert-grammar.dll`
+
+### Linux / macOS: 手动通过 librime 构建
+
+在 `librime` 的构建目录中：
 
 ```bash
 cd librime
 mkdir build && cd build
 
-# 设置 ONNX Runtime 路径（如果未通过 find_package 找到）
 cmake .. \
+  -DBUILD_SHARED_LIBS=ON \
   -DENABLE_EXTERNAL_PLUGINS=ON \
+  -DBUILD_MERGED_PLUGINS=OFF \
   -DONNXRUNTIME_ROOT_DIR=/path/to/onnxruntime \
   -DENABLE_ONNXRUNTIME=ON
 ```
 
-### 2. 编译
+### 编译
 
 ```bash
 make -j$(nproc)  # Linux/macOS
 # 或
-cmake --build . --config Release  # Windows
+cmake --build . --config Release --target rime-bert-grammar  # Windows
 ```
 
 ### 3. 验证
@@ -80,6 +106,14 @@ ONNX Runtime: ENABLED
 - `ONNXRUNTIME_ROOT_DIR` 是否正确设置
 - ONNX Runtime 库文件是否存在
 - 路径是否正确（注意 Windows 使用反斜杠或正斜杠）
+
+另外，发布时还需要一并部署：
+
+- `rime.dll`
+- `rime-plugins/rime-bert-grammar.dll`
+- `onnxruntime.dll`
+- `bert_grammar/model.onnx`
+- `bert_grammar/vocab.txt`
 
 ## 常见问题
 

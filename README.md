@@ -3,6 +3,42 @@
 使用 BERT 模型替代 n-gram 模型（如 octagram）的 Rime 插件。
 本项目处于开发阶段
 
+## Windows 独立 DLL 构建
+
+这个仓库的主 `CMakeLists.txt` 按照 **librime 外部插件** 约定导出：
+
+- `plugin_name = rime-bert-grammar`
+- `plugin_modules = bert_grammar`
+
+因此独立插件 DLL 不是通过“单独配置本仓库”直接生成的，而是通过
+`librime` 的 `plugins/` 构建流程产出。推荐的 Windows 构建方式是：
+
+```powershell
+.\build_plugin_windows.ps1 `
+  -LibrimeRoot ..\librime `
+  -OnnxRuntimeRoot C:\onnxruntime `
+  -Config Release
+```
+
+默认会以 **junction** 的方式把当前仓库挂到 `librime/plugins/bert_grammar`，
+再用下面这些选项配置 `librime`：
+
+- `BUILD_SHARED_LIBS=ON`
+- `ENABLE_EXTERNAL_PLUGINS=ON`
+- `BUILD_MERGED_PLUGINS=OFF`
+
+构建成功后，独立插件 DLL 通常位于：
+
+- `build-bert-grammar/bin/rime-plugins/rime-bert-grammar.dll`
+- 或 `build-bert-grammar/lib/rime-plugins/rime-bert-grammar.dll`
+
+运行时需要与下列文件一起部署：
+
+- `rime.dll`
+- `rime-plugins/rime-bert-grammar.dll`
+- `onnxruntime.dll`（若启用 ONNX Runtime）
+- `bert_grammar/` 模型和词表资源
+
 ## 功能
 
 这个插件提供了一个基于 BERT 的 Grammar 组件，用于：

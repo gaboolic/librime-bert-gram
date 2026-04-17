@@ -6,15 +6,6 @@
 //
 
 // Define glog macros before including headers
-// glog requires GLOG_EXPORT and GLOG_NO_EXPORT to be defined
-#define GLOG_EXPORT
-#define GLOG_NO_EXPORT
-// Define GLOG_DEPRECATED if not defined
-#ifndef GLOG_DEPRECATED
-#define GLOG_DEPRECATED
-#endif
-// Don't define GLOG_USE_GLOG_EXPORT to avoid including non-existent export.h
-
 // Include rime headers first
 #include "bert_grammar.h"
 #include <rime/config.h>

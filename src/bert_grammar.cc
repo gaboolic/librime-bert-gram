@@ -14,6 +14,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 
 // Include ONNX Runtime headers
 #ifdef RIME_USE_ONNXRUNTIME
@@ -21,6 +22,10 @@
 #endif
 
 namespace rime {
+
+namespace {
+
+}  // namespace
 
 // Pimpl implementation to hide ONNX Runtime details
 class BertGrammar::Impl {
@@ -30,6 +35,8 @@ class BertGrammar::Impl {
   std::unique_ptr<Ort::Session> session_;
   Ort::MemoryInfo memory_info_;
   Ort::AllocatorWithDefaultOptions allocator_;
+  std::vector<string> input_name_storage_;
+  std::vector<string> output_name_storage_;
   std::vector<const char*> input_names_;
   std::vector<const char*> output_names_;
   std::vector<Ort::Value> input_tensors_;
@@ -40,13 +47,6 @@ class BertGrammar::Impl {
   
   ~Impl() {
     session_.reset();
-    // Clean up string names
-    for (auto* name : input_names_) {
-      allocator_.Free(const_cast<void*>(reinterpret_cast<const void*>(name)));
-    }
-    for (auto* name : output_names_) {
-      allocator_.Free(const_cast<void*>(reinterpret_cast<const void*>(name)));
-    }
   }
   
   bool LoadSession(const string& model_path) {
@@ -61,20 +61,42 @@ class BertGrammar::Impl {
       // OrtCUDAProviderOptions cuda_options{};
       // session_options.AppendExecutionProvider_CUDA(cuda_options);
       
-      session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), session_options);
+#ifdef _WIN32
+      const std::wstring wide_model_path =
+          std::filesystem::path(model_path).wstring();
+      session_ = std::make_unique<Ort::Session>(env_, wide_model_path.c_str(),
+                                                session_options);
+#else
+      session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(),
+                                                session_options);
+#endif
       
       // Get input/output names
       size_t num_input_nodes = session_->GetInputCount();
       size_t num_output_nodes = session_->GetOutputCount();
+      input_name_storage_.clear();
+      output_name_storage_.clear();
+      input_names_.clear();
+      output_names_.clear();
       
       for (size_t i = 0; i < num_input_nodes; i++) {
-        char* input_name = session_->GetInputName(i, allocator_);
-        input_names_.push_back(input_name);
+        auto input_name = session_->GetInputNameAllocated(i, allocator_);
+        input_name_storage_.push_back(input_name.get());
+      }
+      for (const auto& name : input_name_storage_) {
+        input_names_.push_back(name.c_str());
+      }
+      for (size_t i = 0; i < input_name_storage_.size(); ++i) {
+        LOG(WARNING) << "BertGrammar: model input[" << i << "] name=\""
+                     << input_name_storage_[i] << "\"";
       }
       
       for (size_t i = 0; i < num_output_nodes; i++) {
-        char* output_name = session_->GetOutputName(i, allocator_);
-        output_names_.push_back(output_name);
+        auto output_name = session_->GetOutputNameAllocated(i, allocator_);
+        output_name_storage_.push_back(output_name.get());
+      }
+      for (const auto& name : output_name_storage_) {
+        output_names_.push_back(name.c_str());
       }
       
       LOG(INFO) << "ONNX Runtime session loaded successfully";
@@ -89,6 +111,7 @@ class BertGrammar::Impl {
   }
   
   bool RunInference(const std::vector<int64_t>& input_ids,
+                    const std::vector<int64_t>& token_type_ids,
                     std::vector<float>& output) {
     if (!session_) {
       return false;
@@ -112,14 +135,95 @@ class BertGrammar::Impl {
           attention_mask.size(),
           input_shape.data(),
           input_shape.size());
-      
-      // Prepare inputs
-      std::vector<Ort::Value> ort_inputs;
-      ort_inputs.push_back(std::move(input_tensor));
-      // Add attention mask if model expects it
-      if (input_names_.size() > 1) {
-        ort_inputs.push_back(std::move(attention_tensor));
+
+      std::vector<int64_t> resolved_token_type_ids = token_type_ids;
+      if (resolved_token_type_ids.size() != input_ids.size()) {
+        resolved_token_type_ids.assign(input_ids.size(), 0);
       }
+      Ort::Value token_type_tensor = Ort::Value::CreateTensor<int64_t>(
+          memory_info_,
+          resolved_token_type_ids.data(),
+          resolved_token_type_ids.size(),
+          input_shape.data(),
+          input_shape.size());
+      
+      // Prepare inputs by matching model input names instead of assuming order.
+      std::vector<Ort::Value> ort_inputs;
+      ort_inputs.reserve(input_name_storage_.size());
+      for (size_t i = 0; i < input_name_storage_.size(); ++i) {
+        const auto& input_name = input_name_storage_[i];
+        if (input_name == "input_ids" || input_name.find("input_ids") != string::npos) {
+          LOG(INFO) << "BertGrammar: binding input \"" << input_name
+                    << "\" as input_ids";
+          ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+              memory_info_,
+              const_cast<int64_t*>(input_ids.data()),
+              input_ids.size(),
+              input_shape.data(),
+              input_shape.size()));
+        } else if (input_name == "attention_mask" ||
+                   input_name.find("attention_mask") != string::npos) {
+          LOG(INFO) << "BertGrammar: binding input \"" << input_name
+                    << "\" as attention_mask";
+          ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+              memory_info_,
+              attention_mask.data(),
+              attention_mask.size(),
+              input_shape.data(),
+              input_shape.size()));
+        } else if (input_name == "token_type_ids" ||
+                   input_name == "segment_ids" ||
+                   input_name.find("token_type_ids") != string::npos ||
+                   input_name.find("segment_ids") != string::npos) {
+          LOG(INFO) << "BertGrammar: binding input \"" << input_name
+                    << "\" as token_type_ids";
+          ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+              memory_info_,
+              resolved_token_type_ids.data(),
+              resolved_token_type_ids.size(),
+              input_shape.data(),
+              input_shape.size()));
+        } else if (input_name_storage_.size() == 3) {
+          const char* fallback_kind = i == 0 ? "input_ids" :
+                                      (i == 1 ? "attention_mask" : "token_type_ids");
+          LOG(WARNING) << "BertGrammar: unrecognized model input name \""
+                       << input_name << "\", falling back by position as "
+                       << fallback_kind;
+          if (i == 0) {
+            ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+                memory_info_,
+                const_cast<int64_t*>(input_ids.data()),
+                input_ids.size(),
+                input_shape.data(),
+                input_shape.size()));
+          } else if (i == 1) {
+            ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+                memory_info_,
+                attention_mask.data(),
+                attention_mask.size(),
+                input_shape.data(),
+                input_shape.size()));
+          } else {
+            ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+                memory_info_,
+                resolved_token_type_ids.data(),
+                resolved_token_type_ids.size(),
+                input_shape.data(),
+                input_shape.size()));
+          }
+        } else {
+          LOG(WARNING) << "BertGrammar: unrecognized model input name \""
+                       << input_name << "\", defaulting to zeros token_type_ids";
+          ort_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+              memory_info_,
+              resolved_token_type_ids.data(),
+              resolved_token_type_ids.size(),
+              input_shape.data(),
+              input_shape.size()));
+        }
+      }
+      LOG(INFO) << "BertGrammar: running inference with " << ort_inputs.size()
+                << " inputs";
       
       // Run inference
       auto output_tensors = session_->Run(
@@ -154,7 +258,9 @@ class BertGrammar::Impl {
   Impl() {}
   ~Impl() {}
   bool LoadSession(const string&) { return false; }
-  bool RunInference(const std::vector<int64_t>&, std::vector<float>&) { return false; }
+  bool RunInference(const std::vector<int64_t>&,
+                    const std::vector<int64_t>&,
+                    std::vector<float>&) { return false; }
 #endif
 };
 
@@ -166,8 +272,18 @@ BertGrammar::BertGrammar(Config* config)
   }
   
   // Read model paths from the standard grammar namespace.
-  config->GetString("grammar/model_path", &model_path_);
-  config->GetString("grammar/vocab_path", &vocab_path_);
+  const bool model_path_found =
+      config->GetString("grammar/model_path", &model_path_);
+  const bool vocab_path_found =
+      config->GetString("grammar/vocab_path", &vocab_path_);
+  LOG(INFO) << "BertGrammar: read grammar/model_path success="
+            << model_path_found << " value=\"" << model_path_ << "\"";
+  LOG(INFO) << "BertGrammar: read grammar/vocab_path success="
+            << vocab_path_found << " value=\"" << vocab_path_ << "\"";
+  LOG(INFO) << "BertGrammar: grammar section is_map="
+            << config->IsMap("grammar")
+            << " model_path_is_null=" << config->IsNull("grammar/model_path")
+            << " vocab_path_is_null=" << config->IsNull("grammar/vocab_path");
   
   // If paths are relative, resolve them relative to shared data dir
   if (!model_path_.empty() && model_path_[0] != '/' && model_path_[1] != ':') {
@@ -374,19 +490,25 @@ double BertGrammar::ComputeProbability(const string& context,
   
   // 2. Build input sequence: [CLS] context [SEP] word [SEP]
   std::vector<int64_t> input_ids;
+  std::vector<int64_t> token_type_ids;
   input_ids.push_back(kClsTokenId);  // [CLS]
+  token_type_ids.push_back(0);
   
   // Add context tokens
   for (int64_t token : context_tokens) {
     input_ids.push_back(token);
+    token_type_ids.push_back(0);
   }
   input_ids.push_back(kSepTokenId);  // [SEP]
+  token_type_ids.push_back(0);
   
   // Add word tokens
   for (int64_t token : word_tokens) {
     input_ids.push_back(token);
+    token_type_ids.push_back(1);
   }
   input_ids.push_back(kSepTokenId);  // [SEP]
+  token_type_ids.push_back(1);
   
   // Truncate if too long
   if (input_ids.size() > kMaxSequenceLength) {
@@ -397,21 +519,27 @@ double BertGrammar::ComputeProbability(const string& context,
     
     if (max_context_len > 0 && context_len > max_context_len) {
       input_ids.clear();
+      token_type_ids.clear();
       input_ids.push_back(kClsTokenId);
+      token_type_ids.push_back(0);
       for (size_t i = context_len - max_context_len; i < context_len; i++) {
         input_ids.push_back(context_tokens[i]);
+        token_type_ids.push_back(0);
       }
       input_ids.push_back(kSepTokenId);
+      token_type_ids.push_back(0);
       for (int64_t token : word_tokens) {
         input_ids.push_back(token);
+        token_type_ids.push_back(1);
       }
       input_ids.push_back(kSepTokenId);
+      token_type_ids.push_back(1);
     }
   }
   
   // 3. Run inference
   std::vector<float> output;
-  if (!impl_->RunInference(input_ids, output)) {
+  if (!impl_->RunInference(input_ids, token_type_ids, output)) {
     LOG(WARNING) << "BERT inference failed";
     return 1e-8;
   }
@@ -448,6 +576,15 @@ double BertGrammar::ComputeProbability(const string& context,
   if (prob < 1e-8) {
     prob = 1e-8;
   }
+  LOG_FIRST_N(WARNING, 20)
+      << "BertGrammar: inference success"
+      << " word=\"" << word << "\""
+      << " context_tokens=" << context_tokens.size()
+      << " word_tokens=" << word_tokens.size()
+      << " input_len=" << input_ids.size()
+      << " output_size=" << output.size()
+      << " score=" << score
+      << " prob=" << prob;
   
   return prob;
 #else

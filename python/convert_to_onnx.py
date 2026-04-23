@@ -3,9 +3,21 @@
 支持bert-base-chinese模型的转换
 """
 
-import torch
-from transformers import BertForMaskedLM, BertTokenizer
 import os
+
+import torch
+from transformers import AutoModel, AutoModelForMaskedLM, AutoTokenizer
+
+
+def _build_example_inputs(tokenizer, text):
+    return tokenizer(
+        text,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=512,
+        return_token_type_ids=True,
+    )
 
 
 def convert_bert_to_onnx(
@@ -27,8 +39,8 @@ def convert_bert_to_onnx(
     print("=" * 60)
     
     # 加载模型和分词器
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-    model = BertForMaskedLM.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForMaskedLM.from_pretrained(model_name)
     model.eval()
     
     print("模型加载完成！")
@@ -43,21 +55,18 @@ def convert_bert_to_onnx(
     # 准备示例输入
     # 使用一个示例句子来创建输入
     example_text = "这是一个示例文本"
-    inputs = tokenizer(
-        example_text,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=512
-    )
+    inputs = _build_example_inputs(tokenizer, example_text)
     
     input_ids = inputs['input_ids']
     attention_mask = inputs['attention_mask']
+    token_type_ids = inputs.get('token_type_ids')
     
     print(f"\n示例输入:")
     print(f"  - 文本: {example_text}")
     print(f"  - Input IDs shape: {input_ids.shape}")
     print(f"  - Attention mask shape: {attention_mask.shape}")
+    if token_type_ids is not None:
+        print(f"  - Token type IDs shape: {token_type_ids.shape}")
     
     # 定义输入和输出的动态轴
     if dynamic_axes:
@@ -66,6 +75,8 @@ def convert_bert_to_onnx(
             'attention_mask': {0: 'batch_size', 1: 'sequence_length'},
             'logits': {0: 'batch_size', 1: 'sequence_length'}
         }
+        if token_type_ids is not None:
+            dynamic_axes_config['token_type_ids'] = {0: 'batch_size', 1: 'sequence_length'}
     else:
         dynamic_axes_config = None
     
@@ -77,12 +88,18 @@ def convert_bert_to_onnx(
     print(f"ONNX Opset版本: {opset_version}")
     print(f"动态轴: {dynamic_axes}")
     
+    model_inputs = [input_ids, attention_mask]
+    input_names = ['input_ids', 'attention_mask']
+    if token_type_ids is not None:
+        model_inputs.append(token_type_ids)
+        input_names.append('token_type_ids')
+
     with torch.no_grad():
         torch.onnx.export(
             model,                                    # 模型
-            (input_ids, attention_mask),             # 模型输入（元组）
+            tuple(model_inputs),                     # 模型输入（元组）
             output_path,                              # 输出路径
-            input_names=['input_ids', 'attention_mask'],  # 输入名称
+            input_names=input_names,                 # 输入名称
             output_names=['logits'],                  # 输出名称
             dynamic_axes=dynamic_axes_config,         # 动态轴配置
             opset_version=opset_version,             # ONNX opset版本
@@ -154,13 +171,11 @@ def convert_bert_encoder_only(
         output_dir: 输出目录
         opset_version: ONNX opset版本
     """
-    from transformers import BertModel
-    
     print(f"正在加载BERT编码器模型: {model_name}")
     print("=" * 60)
     
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-    model = BertModel.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
     model.eval()
     
     print("模型加载完成！")
@@ -169,16 +184,11 @@ def convert_bert_encoder_only(
     
     # 准备示例输入
     example_text = "这是一个示例文本"
-    inputs = tokenizer(
-        example_text,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=512
-    )
+    inputs = _build_example_inputs(tokenizer, example_text)
     
     input_ids = inputs['input_ids']
     attention_mask = inputs['attention_mask']
+    token_type_ids = inputs.get('token_type_ids')
     
     # 动态轴配置
     dynamic_axes_config = {
@@ -187,18 +197,26 @@ def convert_bert_encoder_only(
         'last_hidden_state': {0: 'batch_size', 1: 'sequence_length'},
         'pooler_output': {0: 'batch_size'}
     }
+    if token_type_ids is not None:
+        dynamic_axes_config['token_type_ids'] = {0: 'batch_size', 1: 'sequence_length'}
     
     output_path = os.path.join(output_dir, f"{model_name.replace('/', '_')}_encoder.onnx")
     
     print(f"\n开始转换为ONNX格式...")
     print(f"输出路径: {output_path}")
     
+    model_inputs = [input_ids, attention_mask]
+    input_names = ['input_ids', 'attention_mask']
+    if token_type_ids is not None:
+        model_inputs.append(token_type_ids)
+        input_names.append('token_type_ids')
+
     with torch.no_grad():
         torch.onnx.export(
             model,
-            (input_ids, attention_mask),
+            tuple(model_inputs),
             output_path,
-            input_names=['input_ids', 'attention_mask'],
+            input_names=input_names,
             output_names=['last_hidden_state', 'pooler_output'],
             dynamic_axes=dynamic_axes_config,
             opset_version=opset_version,
